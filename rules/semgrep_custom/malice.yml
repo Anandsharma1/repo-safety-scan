@@ -1,0 +1,181 @@
+# Malice-focused Semgrep rules.
+#
+# Scope: patterns indicating HOSTILE INTENT that public rulesets don't reliably
+# catch. Deliberately narrow to keep false-positive rate low.
+#
+# NOT here: generic vuln patterns (SQL injection, XSS, etc.) — use
+# p/r2c-security-audit or p/trailofbits for those.
+rules:
+
+  # ------- Reverse shells -------
+  - id: py-reverse-shell-socket-subprocess
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Socket file descriptor is passed to subprocess stdio — classic Python
+      reverse-shell pattern. Very rare in legitimate code.
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $S = socket.socket(...)
+              ...
+              subprocess.$F(..., stdin=$S.fileno(), ...)
+          - pattern: |
+              $S = socket.socket(...)
+              ...
+              subprocess.$F(..., stdout=$S.fileno(), ...)
+          - pattern: |
+              $S = socket.socket(...)
+              ...
+              os.dup2($S.fileno(), ...)
+
+  - id: py-exec-base64-obfuscation
+    languages: [python]
+    severity: ERROR
+    message: >-
+      exec/eval of base64-decoded content is a staple malware packing technique.
+      Legitimate code rarely needs this.
+    patterns:
+      - pattern-either:
+          - pattern: exec(base64.b64decode(...))
+          - pattern: exec(base64.b64decode(...).decode(...))
+          - pattern: eval(base64.b64decode(...))
+          - pattern: eval(base64.b64decode(...).decode(...))
+          - pattern: exec(__import__("base64").b64decode(...))
+          - pattern: exec(codecs.decode(..., "base64"))
+          - pattern: exec(bytes.fromhex(...))
+
+  - id: py-exec-compile-runtime-download
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Downloading code and exec-ing it at runtime is a common remote-loader
+      pattern (skid/dropper style).
+    patterns:
+      - pattern-either:
+          - pattern: exec(urllib.request.urlopen(...).read())
+          - pattern: exec(requests.get(...).text)
+          - pattern: exec(requests.get(...).content)
+          - pattern: exec(urllib.request.urlopen(...).read().decode(...))
+
+  # ------- Unsafe deserialization -------
+  - id: py-unsafe-pickle-load
+    languages: [python]
+    severity: WARNING
+    message: >-
+      pickle.load/loads executes arbitrary code during deserialization.
+      If the input is untrusted (downloaded model, network payload, third-party
+      cache), this is a full RCE. Use safer formats (JSON, safetensors, protobuf).
+    patterns:
+      - pattern-either:
+          - pattern: pickle.load(...)
+          - pattern: pickle.loads(...)
+          - pattern: cPickle.load(...)
+          - pattern: cPickle.loads(...)
+          - pattern: joblib.load(...)
+
+  - id: py-torch-load-without-weights-only
+    languages: [python]
+    severity: WARNING
+    message: >-
+      torch.load without weights_only=True allows arbitrary code execution via
+      pickle. Set weights_only=True (PyTorch >=1.13) when loading untrusted .pt
+      files — all downloaded model weights count as untrusted.
+    patterns:
+      - pattern-either:
+          - pattern: torch.load($X)
+          - pattern: torch.load($X, weights_only=False, ...)
+          - pattern: torch.load($X, map_location=..., weights_only=False, ...)
+
+  # ------- Credential access -------
+  - id: py-credential-file-read
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Reading SSH/AWS/GCP credential files from the user's home dir is almost
+      always exfiltration prep. Legitimate tools use the respective SDKs.
+    patterns:
+      - pattern-either:
+          - pattern: open("~/.ssh/id_rsa", ...)
+          - pattern: open("~/.ssh/id_ed25519", ...)
+          - pattern: open("~/.aws/credentials", ...)
+          - pattern: open("~/.aws/config", ...)
+          - pattern: open("~/.netrc", ...)
+          - pattern: open("~/.config/gcloud/credentials.db", ...)
+          - pattern: open(os.path.expanduser("~/.ssh/id_rsa"), ...)
+          - pattern: open(os.path.expanduser("~/.aws/credentials"), ...)
+          - pattern: Path.home() / ".ssh" / "id_rsa"
+          - pattern: Path.home() / ".aws" / "credentials"
+
+  # ------- Install-time network I/O -------
+  - id: py-install-time-network
+    languages: [python]
+    severity: ERROR
+    message: >-
+      setup.py / pyproject hook code making outbound network calls during
+      install. Legitimate packages use wheels/sdists and don't phone home at
+      install time.
+    paths:
+      include:
+        - "setup.py"
+        - "**/setup.py"
+    patterns:
+      - pattern-either:
+          - pattern: urllib.request.urlopen(...)
+          - pattern: urllib.urlopen(...)
+          - pattern: requests.get(...)
+          - pattern: requests.post(...)
+          - pattern: httpx.get(...)
+          - pattern: httpx.post(...)
+          - pattern: subprocess.$F(["curl", ...], ...)
+          - pattern: subprocess.$F(["wget", ...], ...)
+          - pattern: os.system("curl ...")
+          - pattern: os.system("wget ...")
+
+  # ------- Shell reverse shells -------
+  - id: bash-reverse-shell
+    languages: [bash, generic]
+    severity: ERROR
+    message: >-
+      Shell reverse-shell one-liner. /dev/tcp, bash -i >&, or nc -e are used
+      almost exclusively by attackers.
+    patterns:
+      - pattern-either:
+          - pattern-regex: 'bash\s+-i\s*>&?\s*/dev/tcp/'
+          - pattern-regex: '0<&196;\s*exec\s+196<>/dev/tcp/'
+          - pattern-regex: 'nc(\.\w+)?\s+-e\s+(/bin/)?(ba)?sh'
+          - pattern-regex: 'mkfifo\s+/tmp/[a-z]+;\s*.*\s*/bin/(ba)?sh.*\s*>\s*/tmp/[a-z]+'
+          - pattern-regex: 'python\s*-c\s*["'"'"'].*socket.*connect.*subprocess'
+          - pattern-regex: 'perl\s*-e\s*["'"'"'].*socket.*connect.*exec'
+
+  # ------- Env var exfil via HTTP -------
+  - id: py-env-to-outbound-http
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Environment variables are being POSTed to a remote URL. Env is where
+      credentials live — flag for review.
+    patterns:
+      - pattern-either:
+          - pattern: requests.post(..., data=os.environ, ...)
+          - pattern: requests.post(..., json=os.environ, ...)
+          - pattern: requests.post(..., data=dict(os.environ), ...)
+          - pattern: requests.post(..., json=dict(os.environ), ...)
+          - pattern: urllib.request.urlopen($URL, data=json.dumps(dict(os.environ)).encode(...))
+          - pattern: httpx.post(..., json=dict(os.environ), ...)
+
+  # ------- Shell-rc persistence -------
+  - id: py-shell-rc-persistence
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Writing to a shell rc file establishes persistence. Legitimate installers
+      prompt the user first.
+    patterns:
+      - pattern-either:
+          - pattern: open("~/.bashrc", "a", ...)
+          - pattern: open("~/.zshrc", "a", ...)
+          - pattern: open("~/.profile", "a", ...)
+          - pattern: open(os.path.expanduser("~/.bashrc"), "a", ...)
+          - pattern: open(os.path.expanduser("~/.zshrc"), "a", ...)
+          - pattern: open(os.path.expanduser("~/.profile"), "a", ...)

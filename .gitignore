@@ -1,0 +1,14 @@
+# Scanner artifacts and workdirs
+/tmp/rss-*
+*.log
+*.pyc
+__pycache__/
+.venv/
+venv/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store

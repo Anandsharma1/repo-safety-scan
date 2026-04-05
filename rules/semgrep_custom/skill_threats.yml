@@ -1,0 +1,132 @@
+# Agent-skill-specific threat rules.
+#
+# Scope: patterns that are dangerous in the context of agent skills
+# (Claude Code / Codex / Cursor / MCP) because the skill text can act
+# as instructions to an LLM holding credentials and shell access.
+#
+# NOT here: general code-level malice — see malice.yml.
+rules:
+
+  - id: skill-hook-network-call
+    languages: [python, bash, generic]
+    severity: ERROR
+    message: >-
+      Claude Code / Codex hook files that make network calls can exfiltrate
+      conversation state, tool outputs, or environment secrets. Review the
+      destination and the data being sent.
+    paths:
+      include:
+        - ".claude/hooks/*"
+        - ".claude/hooks/**"
+        - ".codex/hooks/*"
+        - ".codex/hooks/**"
+    patterns:
+      - pattern-either:
+          - pattern-regex: '\b(curl|wget|nc|python.*urllib|python.*requests|node.*fetch)\b'
+          - pattern-regex: '/dev/tcp/'
+
+  - id: skill-instructs-credential-read
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      Skill instruction file references reading user credentials (SSH, AWS,
+      GCP, .env). Legitimate skills don't need these.
+    paths:
+      include:
+        - "SKILL.md"
+        - "**/SKILL.md"
+        - "**/skill.yaml"
+        - "**/skill.yml"
+        - ".claude/commands/**"
+        - ".claude/skills/**"
+        - ".codex/skills/**"
+        - ".cursor/rules/**"
+    patterns:
+      - pattern-either:
+          - pattern-regex: '~/\.ssh/(id_rsa|id_ed25519|id_ecdsa|id_dsa)'
+          - pattern-regex: '~/\.aws/credentials'
+          - pattern-regex: '~/\.netrc'
+          - pattern-regex: '~/\.config/gcloud/credentials'
+          - pattern-regex: '(?i)(send|post|upload|exfiltrate|transmit).*credentials'
+
+  - id: skill-contains-base64-payload
+    languages: [generic]
+    severity: WARNING
+    message: >-
+      Skill file contains a long base64-looking string. Skills are instructions,
+      not data — long opaque blobs are a packed-payload pattern.
+    paths:
+      include:
+        - "SKILL.md"
+        - "**/SKILL.md"
+        - "**/skill.yaml"
+        - "**/skill.yml"
+        - ".claude/commands/**"
+        - ".claude/skills/**"
+        - ".codex/skills/**"
+    pattern-regex: '[A-Za-z0-9+/]{200,}={0,2}'
+
+  - id: skill-instructs-rm-rf
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      Skill instruction references "rm -rf /" or equivalent destructive ops.
+      If the LLM follows the instruction literally this is catastrophic.
+    paths:
+      include:
+        - "SKILL.md"
+        - "**/SKILL.md"
+        - ".claude/commands/**"
+        - ".claude/skills/**"
+        - ".codex/skills/**"
+    patterns:
+      - pattern-either:
+          - pattern-regex: 'rm\s+-rf\s+/(\s|$)'
+          - pattern-regex: 'rm\s+-rf\s+/\*'
+          - pattern-regex: 'rm\s+-rf\s+\$HOME'
+          - pattern-regex: 'rm\s+-rf\s+~'
+          - pattern-regex: ':\(\)\s*\{\s*:\|:&\s*\};:'
+          - pattern-regex: 'dd\s+if=/dev/(zero|random)\s+of=/dev/'
+          - pattern-regex: 'mkfs\.[a-z0-9]+\s+/dev/'
+
+  - id: skill-prompt-injection-role-switch
+    languages: [generic]
+    severity: WARNING
+    message: >-
+      Skill text attempts to redefine the assistant's role or inject system
+      instructions — classic prompt-injection pattern when the skill is
+      consumed by an LLM.
+    paths:
+      include:
+        - "SKILL.md"
+        - "**/SKILL.md"
+        - ".claude/commands/**"
+        - ".claude/skills/**"
+    patterns:
+      - pattern-either:
+          - pattern-regex: '(?i)ignore (all )?previous (instructions|rules|prompts)'
+          - pattern-regex: '(?i)(you are now|from now on you are|act as if you are) (a |an )?(different|new|unrestricted|jailbroken)'
+          - pattern-regex: '(?i)disregard (your|the) (system|safety) (prompt|guidelines|rules)'
+          - pattern-regex: '(?i)reveal (the|your) system prompt'
+
+  - id: mcp-server-dangerous-tool
+    languages: [python, javascript, typescript, json, generic]
+    severity: WARNING
+    message: >-
+      MCP server registers an unrestricted shell-execution tool. Any
+      MCP-connected client can then be instructed to run arbitrary commands.
+      Scope tools narrowly and validate input.
+    paths:
+      include:
+        - "**/mcp.json"
+        - "**/mcp.yaml"
+        - "**/server.py"
+        - "**/server.ts"
+        - "**/server.js"
+        - "**/index.ts"
+        - "**/index.js"
+    patterns:
+      - pattern-either:
+          - pattern-regex: '(?i)"(name|tool)":\s*"(shell|exec|run_command|bash|system)"'
+          - pattern-regex: 'subprocess\.Popen\(.*shell\s*=\s*True.*user_input'
+          - pattern-regex: 'child_process\.(exec|spawn)\s*\(\s*(req|input|args|params)'
