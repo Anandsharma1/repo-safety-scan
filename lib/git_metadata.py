@@ -6,9 +6,9 @@ Background: a malicious repo can carry `.git/config` with directives like
 run attacker code the moment any git command touches the workspace. This
 class of bug is what GHSA-j4h9-wv2m-wrf7 is about.
 
-Also flags `.gitattributes` with `filter=` (smudge/clean scripts) and any
-content in `.git/hooks/` (which we strip during ingest, but the presence
-itself is a signal).
+Also flags `.gitattributes` / `.git/info/attributes` entries with `filter=`
+(smudge/clean scripts) and any content in `.git/hooks/` (which we strip
+during ingest, but the presence itself is a signal).
 
 Handles git-worktree / submodule layout where `.git` is a FILE pointing at
 the real gitdir via `gitdir: <path>`.
@@ -35,10 +35,14 @@ HOSTILE_KEYS: list[tuple[str, str, str]] = [
     ("credential.*.helper",  "medium",   "credential.<url>.helper runs on auth flows"),
     ("include.path",         "medium",   "include.path can chain-load arbitrary config files"),
     ("includeIf.*.path",     "high",     "includeIf can chain-load hostile config on condition"),
+    ("filter.*.clean",       "high",     "filter.<name>.clean runs an arbitrary command on checkout/add"),
+    ("filter.*.smudge",      "high",     "filter.<name>.smudge runs an arbitrary command on checkout/add"),
+    ("filter.*.process",     "high",     "filter.<name>.process runs an arbitrary command during path handling"),
 ]
 
 HOSTILE_KEYS_VALUE_GATED: list[tuple[str, re.Pattern, str, str]] = [
     # (canonical_key, value_regex_that_makes_it_hostile, severity, why)
+    ("protocol.allow", re.compile(r"^\s*always\s*$"), "medium", "protocol.allow=always enables dangerous URL protocols (ext, file, ftp, ...)"),
     ("protocol.*.allow", re.compile(r"^\s*always\s*$"), "medium", "protocol.<name>.allow=always enables dangerous URL protocols (ext, file, ftp, ...)"),
 ]
 
@@ -158,9 +162,16 @@ def scan_git_config(cfg_path: Path) -> list[dict]:
     return findings
 
 
-def scan_gitattributes(root: Path) -> list[dict]:
+def scan_gitattributes(root: Path, git_dir: Path | None) -> list[dict]:
     findings = []
-    for ga in list(root.rglob(".gitattributes"))[:200]:
+    candidates = list(root.rglob(".gitattributes"))
+    # Repository-local attributes can also live in info/attributes under the
+    # resolved gitdir (either .git/info/attributes or bare-repo info/attributes).
+    info_attr = (git_dir / "info" / "attributes") if git_dir is not None else None
+    if info_attr is not None and info_attr.is_file():
+        candidates.append(info_attr)
+
+    for ga in candidates:
         try:
             text = ga.read_text(encoding="utf-8", errors="replace")
         except OSError:
@@ -237,8 +248,9 @@ def main() -> int:
     findings: list[dict] = []
     if git_dir is not None:
         findings += scan_git_config(git_dir / "config")
+        findings += scan_git_config(git_dir / "config.worktree")
         findings += scan_git_hooks(git_dir)
-    findings += scan_gitattributes(src)
+    findings += scan_gitattributes(src, git_dir)
 
     print(json.dumps({
         "tool": "git_metadata",

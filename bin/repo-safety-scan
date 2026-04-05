@@ -37,6 +37,32 @@ log()  { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
 warn() { printf '[%s] WARN: %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
 die()  { printf '[%s] ERROR: %s\n' "$(date +%H:%M:%S)" "$*" >&2; exit 1; }
 
+resolve_gitdir_file() {
+    local git_file="$1"
+    python3 - "$git_file" <<'PY'
+import sys
+from pathlib import Path
+
+git_file = Path(sys.argv[1])
+try:
+    text = git_file.read_text(encoding="utf-8", errors="replace")
+except OSError:
+    raise SystemExit(1)
+
+for line in text.splitlines():
+    line = line.strip()
+    if line.lower().startswith("gitdir:"):
+        rel_or_abs = line.split(":", 1)[1].strip()
+        candidate = Path(rel_or_abs)
+        if not candidate.is_absolute():
+            candidate = (git_file.parent / candidate).resolve()
+        print(candidate)
+        raise SystemExit(0)
+
+raise SystemExit(1)
+PY
+}
+
 # -------- Arg parsing --------
 MODE="repo"
 TARGET=""
@@ -110,6 +136,17 @@ ingest() {
         else
             cp -r "$TARGET/." "$SRC/"
             rm -rf "$SRC/.git/hooks" 2>/dev/null || true
+        fi
+        # Preserve worktree/submodule git metadata when the source checkout uses a
+        # .git file that points at an external gitdir. Copy that gitdir into our
+        # workspace so later scanners can inspect it.
+        if [[ -f "$TARGET/.git" ]]; then
+            local_gitdir="$(resolve_gitdir_file "$TARGET/.git" || true)"
+            if [[ -n "${local_gitdir:-}" && -d "$local_gitdir" ]]; then
+                rm -rf "$SRC/.git"
+                mkdir -p "$SRC/.git"
+                cp -a "$local_gitdir/." "$SRC/.git/"
+            fi
         fi
     else
         die "target is neither a URL nor an existing directory: $TARGET"

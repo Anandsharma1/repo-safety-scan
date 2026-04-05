@@ -161,8 +161,14 @@ rules:
           - pattern: requests.post(..., json=os.environ, ...)
           - pattern: requests.post(..., data=dict(os.environ), ...)
           - pattern: requests.post(..., json=dict(os.environ), ...)
+          - pattern: requests.$F(..., data=os.environ, ...)
+          - pattern: requests.$F(..., json=os.environ, ...)
+          - pattern: requests.$F(..., data=dict(os.environ), ...)
+          - pattern: requests.$F(..., json=dict(os.environ), ...)
           - pattern: urllib.request.urlopen($URL, data=json.dumps(dict(os.environ)).encode(...))
           - pattern: httpx.post(..., json=dict(os.environ), ...)
+          - pattern: httpx.$F(..., json=dict(os.environ), ...)
+          - pattern: httpx.$F(..., data=dict(os.environ), ...)
 
   # ------- Shell-rc persistence -------
   - id: py-shell-rc-persistence
