@@ -8,7 +8,7 @@
 rules:
 
   - id: skill-hook-network-call
-    languages: [python, bash, generic]
+    languages: [generic]
     severity: ERROR
     message: >-
       Claude Code / Codex hook files that make network calls can exfiltrate
@@ -22,8 +22,21 @@ rules:
         - ".codex/hooks/**"
     patterns:
       - pattern-either:
-          - pattern-regex: '\b(curl|wget|nc|python.*urllib|python.*requests|node.*fetch)\b'
-          - pattern-regex: '/dev/tcp/'
+          # curl with a flag or URL (not just the word "curl" in a grep/sed pattern)
+          - pattern-regex: '\bcurl\s+(-[A-Za-z]|--[A-Za-z]|[''"]?https?://|[''"]?ftp://)'
+          - pattern-regex: '\bwget\s+(-[A-Za-z]|--[A-Za-z]|[''"]?https?://|[''"]?ftp://)'
+          # nc to host:port
+          - pattern-regex: '\bnc\s+[0-9A-Za-z\.\-]+\s+\d{1,5}\b'
+          # /dev/tcp shell redirection
+          - pattern-regex: '/dev/tcp/[0-9A-Za-z\.\-]+/\d+'
+          # Python network libs
+          - pattern-regex: '\burllib\.request\.urlopen\s*\('
+          - pattern-regex: '\brequests\.(get|post|put|delete|patch|head|request)\s*\('
+          - pattern-regex: '\bhttpx\.(get|post|put|delete|patch|request)\s*\('
+          # Node/fetch with URL
+          - pattern-regex: '\bfetch\s*\(\s*[''"`]?https?://'
+          # HTTP client libraries (ruby/go/perl LWP)
+          - pattern-regex: '\b(Net::HTTP|LWP::UserAgent|http\.Client)\b'
 
   - id: skill-instructs-credential-read
     languages: [generic]
@@ -110,7 +123,7 @@ rules:
           - pattern-regex: '(?i)reveal (the|your) system prompt'
 
   - id: mcp-server-dangerous-tool
-    languages: [python, javascript, typescript, json, generic]
+    languages: [generic]
     severity: WARNING
     message: >-
       MCP server registers an unrestricted shell-execution tool. Any

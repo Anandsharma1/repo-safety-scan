@@ -134,7 +134,7 @@ rules:
 
   # ------- Shell reverse shells -------
   - id: bash-reverse-shell
-    languages: [bash, generic]
+    languages: [generic]
     severity: ERROR
     message: >-
       Shell reverse-shell one-liner. /dev/tcp, bash -i >&, or nc -e are used
@@ -145,8 +145,8 @@ rules:
           - pattern-regex: '0<&196;\s*exec\s+196<>/dev/tcp/'
           - pattern-regex: 'nc(\.\w+)?\s+-e\s+(/bin/)?(ba)?sh'
           - pattern-regex: 'mkfifo\s+/tmp/[a-z]+;\s*.*\s*/bin/(ba)?sh.*\s*>\s*/tmp/[a-z]+'
-          - pattern-regex: 'python\s*-c\s*["'"'"'].*socket.*connect.*subprocess'
-          - pattern-regex: 'perl\s*-e\s*["'"'"'].*socket.*connect.*exec'
+          - pattern-regex: 'python\s*-c\s*[''"].*socket.*connect.*subprocess'
+          - pattern-regex: 'perl\s*-e\s*[''"].*socket.*connect.*exec'
 
   # ------- Env var exfil via HTTP -------
   - id: py-env-to-outbound-http

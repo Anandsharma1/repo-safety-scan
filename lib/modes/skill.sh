@@ -61,7 +61,7 @@ run_semgrep_skill() {
 run_gitleaks() {
     if ! have gitleaks; then log_missing gitleaks; return 0; fi
     note "gitleaks: secrets scan..."
-    if [[ -d "$RSS_SRC/.git" ]]; then
+    if [[ -e "$RSS_SRC/.git" ]]; then
         gitleaks detect --source "$RSS_SRC" --no-banner \
             --report-format json --report-path "$RSS_ART/gitleaks.json" \
             --log-opts="--all" > "$RSS_ART/gitleaks.log" 2>&1

@@ -27,6 +27,38 @@ def load_json(path: Path) -> dict | list | None:
         return {"_load_error": str(e)}
 
 
+_SOURCE_LINE_CACHE: dict[tuple[str, int], str] = {}
+
+
+def _source_line(path_str: str, line_no: int) -> str:
+    """Read one line from a source file. Cached. Returns '' on any failure."""
+    if not path_str or not line_no:
+        return ""
+    key = (path_str, line_no)
+    if key in _SOURCE_LINE_CACHE:
+        return _SOURCE_LINE_CACHE[key]
+    try:
+        with open(path_str, "r", encoding="utf-8", errors="replace") as f:
+            for i, line in enumerate(f, start=1):
+                if i == line_no:
+                    _SOURCE_LINE_CACHE[key] = line.rstrip("\n").strip()
+                    return _SOURCE_LINE_CACHE[key]
+                if i > line_no:
+                    break
+    except OSError:
+        pass
+    _SOURCE_LINE_CACHE[key] = ""
+    return ""
+
+
+def _evidence_from_snippet_or_source(snippet: str, file_path: str, line_no: int) -> str:
+    """Prefer semgrep's snippet unless it's the 'requires login' placeholder."""
+    s = (snippet or "").strip()
+    if s and s.lower() != "requires login":
+        return s[:240]
+    return _source_line(file_path, line_no)[:240]
+
+
 def norm_sev(s: str | None) -> str:
     if not s:
         return "unknown"
@@ -83,13 +115,15 @@ def collect_findings(art: Path) -> tuple[list[dict], dict]:
         results = sg.get("results", []) if isinstance(sg, dict) else []
         for r in results:
             extra = r.get("extra", {}) or {}
+            file_path = r.get("path", "")
+            line_no = (r.get("start", {}) or {}).get("line", 0)
             all_findings.append({
                 "tool": "semgrep",
                 "rule": r.get("check_id", "semgrep-rule"),
                 "severity": norm_sev(extra.get("severity")),
-                "file": r.get("path", ""),
-                "line": (r.get("start", {}) or {}).get("line", 0),
-                "match": (extra.get("lines") or "")[:240],
+                "file": file_path,
+                "line": line_no,
+                "match": _evidence_from_snippet_or_source(extra.get("lines") or "", file_path, line_no),
                 "why": (extra.get("message") or "")[:400],
             })
         status["semgrep"] = "ok" if results else "no-findings"
@@ -128,7 +162,12 @@ def collect_findings(art: Path) -> tuple[list[dict], dict]:
                     })
         status["osv-scanner"] = "ok" if vulns_total else "no-findings"
 
-    # guarddog (JSON schema is {"name/version": {"findings": [...], ...}} per scan)
+    # guarddog (merged file from possibly multiple ecosystems).
+    # Schemas we've seen per package:
+    #   {"pkg/ver": {"results": {"rule_id": <truthy_details>}}}
+    #   {"pkg/ver": {"findings": [{"rule": ..., "description": ...}, ...]}}
+    #   {"pkg/ver": {"issues": [{"id": ...}, ...]}}
+    #   top-level list form: [{"package": "pkg", "findings": [...]}, ...]
     gd = load_json(art / "guarddog.json")
     if gd is None:
         status["guarddog"] = _tool_status(art, "guarddog")
@@ -136,22 +175,44 @@ def collect_findings(art: Path) -> tuple[list[dict], dict]:
         status["guarddog"] = f"error: {gd['_load_error']}"
     else:
         count = 0
-        if isinstance(gd, dict):
-            for pkg, data in gd.items():
-                if not isinstance(data, dict): continue
-                for rid, details in (data.get("results") or {}).items():
-                    if not details: continue
+
+        def _emit_findings(pkg_label: str, data: dict):
+            nonlocal count
+            # Shape 1: {"results": {rid: details}}
+            results = data.get("results") if isinstance(data, dict) else None
+            if isinstance(results, dict):
+                for rid, details in results.items():
+                    if not details:
+                        continue
                     count += 1
                     msg = details if isinstance(details, str) else json.dumps(details)[:400]
                     all_findings.append({
-                        "tool": "guarddog",
-                        "rule": rid,
-                        "severity": "high",
-                        "file": pkg,
-                        "line": 0,
-                        "match": pkg,
-                        "why": msg[:400],
+                        "tool": "guarddog", "rule": rid, "severity": "high",
+                        "file": pkg_label, "line": 0, "match": pkg_label, "why": msg[:400],
                     })
+            # Shape 2/3: list of finding objects
+            for key in ("findings", "issues", "detected_rules"):
+                items = data.get(key) if isinstance(data, dict) else None
+                if isinstance(items, list):
+                    for it in items:
+                        count += 1
+                        rid = (it.get("rule") or it.get("id") or it.get("name") or key) if isinstance(it, dict) else str(it)
+                        msg = (it.get("description") or it.get("message") or json.dumps(it))[:400] if isinstance(it, dict) else str(it)[:400]
+                        all_findings.append({
+                            "tool": "guarddog", "rule": rid, "severity": "high",
+                            "file": pkg_label, "line": 0, "match": pkg_label, "why": msg[:400],
+                        })
+
+        if isinstance(gd, dict):
+            for pkg, data in gd.items():
+                if isinstance(data, dict):
+                    _emit_findings(pkg, data)
+        elif isinstance(gd, list):
+            for entry in gd:
+                if isinstance(entry, dict):
+                    pkg = entry.get("package") or entry.get("name") or "<unknown>"
+                    _emit_findings(str(pkg), entry)
+
         status["guarddog"] = "ok" if count else "no-findings"
 
     # cisco skill-scanner
@@ -185,15 +246,24 @@ def collect_findings(art: Path) -> tuple[list[dict], dict]:
 
 
 def _tool_status(art: Path, tool: str) -> str:
-    """Inspect errors.log to differentiate missing vs failed vs not-run."""
+    """Inspect errors.log to differentiate missing vs failed vs not-run.
+
+    Matches prefix-style failure labels too: 'guarddog pypi failed (exit N)'
+    counts as a failure for the 'guarddog' tool.
+    """
     err_log = art / "errors.log"
     if not err_log.is_file():
         return "not-run"
     text = err_log.read_text(encoding="utf-8", errors="replace")
     if f"{tool}: not installed" in text:
         return "missing (install to enable)"
-    if f"{tool} failed" in text:
-        return "failed (see errors.log)"
+    # Match either "<tool> failed" or "<tool> <subcommand> failed"
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(f"{tool} ") and "failed" in stripped:
+            return "failed (see errors.log)"
+        if stripped.startswith(f"{tool}:") and "failed" in stripped:
+            return "failed (see errors.log)"
     return "not-run"
 
 

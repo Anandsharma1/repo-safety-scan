@@ -30,8 +30,8 @@ log_failed()  { echo "$1 failed (exit $2)" >> "$ERR_LOG"; note "$1 failed (exit 
 run_gitleaks() {
     if ! have gitleaks; then log_missing gitleaks; return 0; fi
     note "gitleaks: scanning (with --log-opts=--all for full history)..."
-    # detect mode scans entire repo; --no-git disabled so history is included
-    if [[ -d "$RSS_SRC/.git" ]]; then
+    # detect mode scans entire repo; include history if .git is present (dir OR file-pointer for worktrees/submodules)
+    if [[ -e "$RSS_SRC/.git" ]]; then
         gitleaks detect --source "$RSS_SRC" --no-banner \
             --report-format json --report-path "$RSS_ART/gitleaks.json" \
             --log-opts="--all" \
