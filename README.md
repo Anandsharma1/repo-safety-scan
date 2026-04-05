@@ -171,6 +171,9 @@ via their public CLIs with no modifications.
 
 ## License
 
-Not yet declared. Treat as "all rights reserved" until a LICENSE file is
-added. (MIT or Apache-2.0 are natural fits given the dependencies; will
-pick one before tagging a release.)
+[MIT](./LICENSE) — do whatever, no warranty.
+
+## Security
+
+See [SECURITY.md](./SECURITY.md) for how to report vulnerabilities in
+the scanner itself. False positives / missing coverage → public issues.
