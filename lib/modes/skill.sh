@@ -35,13 +35,15 @@ run_skill_scanner() {
         return 0
     fi
     note "cisco skill-scanner: scanning (primary engine for this mode)..."
-    # skill-scanner's CLI surface can vary; try a reasonable invocation and
-    # fall back to a permissive form.
-    if ! skill-scanner "$RSS_SRC" --format json -o "$RSS_ART/skill_scanner.json" \
-           > "$RSS_ART/skill_scanner.log" 2>&1; then
-        # retry without -o flag, write stdout to file
-        skill-scanner "$RSS_SRC" --format json > "$RSS_ART/skill_scanner.json" \
-           2>> "$RSS_ART/skill_scanner.log" || log_failed "skill-scanner" $?
+    # `scan` takes a single skill directory; `scan-all` walks a tree of them.
+    if [[ -f "$RSS_SRC/SKILL.md" ]]; then
+        skill-scanner scan "$RSS_SRC" \
+            --format json --output-json "$RSS_ART/skill_scanner.json" \
+            > "$RSS_ART/skill_scanner.log" 2>&1 || log_failed "skill-scanner" $?
+    else
+        skill-scanner scan-all "$RSS_SRC" --recursive \
+            --format json --output-json "$RSS_ART/skill_scanner.json" \
+            > "$RSS_ART/skill_scanner.log" 2>&1 || log_failed "skill-scanner" $?
     fi
 }
 

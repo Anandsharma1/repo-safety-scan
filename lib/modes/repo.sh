@@ -134,7 +134,9 @@ maybe_run_skill_scanner_inline() {
 
     note "repo contains skill-like content — auto-invoking cisco skill-scanner..."
     if have skill-scanner; then
-        skill-scanner "$RSS_SRC" --format json -o "$RSS_ART/skill_scanner.json" \
+        # A repo is a tree of skills, not one skill dir — always scan-all.
+        skill-scanner scan-all "$RSS_SRC" --recursive \
+            --format json --output-json "$RSS_ART/skill_scanner.json" \
             > "$RSS_ART/skill_scanner.log" 2>&1 || log_failed "skill-scanner" $?
     else
         log_missing skill-scanner
